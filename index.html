@@ -1,1 +1,123 @@
-<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CONTROL Mesh Test</title><style>body{background:#111827;color:white;font:16px system-ui;max-width:600px;margin:auto;padding:20px}canvas{width:100%;touch-action:none;background:#26354c}button{padding:12px;margin:5px}</style><h2>CONTROL · Mesh Test</h2><input id="file" type="file" accept="image/*"><p id="status">Выберите фото</p><canvas id="c"></canvas><p><button id="reset">Сброс</button><button id="before">До / После</button><button id="save">Сохранить PNG</button></p><label>Радиус <input id="radius" type="range" min="25" max="160" value="70"></label><script src="app.js"></script></html>
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>SHARSHARIKI CONTROL — Photo Mesh Editor</title>
+<style>
+:root{--bg:#0b0e13;--pn:#141a22;--tx:#d8e6f2;--ac:#27d9ff;color-scheme:dark}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--tx);font:13px -apple-system,system-ui,sans-serif;overscroll-behavior:none}
+body{display:flex;flex-direction:column;height:100dvh;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+.bar{display:flex;gap:6px;padding:6px;background:var(--pn);overflow-x:auto;flex:none;align-items:center}
+button{background:#1c2632;color:var(--tx);border:1px solid #2a3a4c;border-radius:8px;padding:8px 10px;font:inherit;white-space:nowrap}
+button.on{border-color:var(--ac);color:var(--ac);box-shadow:0 0 8px #27d9ff55}
+button:disabled{opacity:.4}
+label{display:flex;align-items:center;gap:4px;white-space:nowrap;font-size:12px}
+input[type=range]{width:90px;accent-color:var(--ac)}
+i{font-style:normal;border:1px solid #456;border-radius:50%;width:16px;height:16px;display:inline-grid;place-items:center;font-size:10px;color:#89a}
+#stage{flex:1;min-height:0;display:grid;place-items:center;touch-action:none;position:relative}
+#wrap{position:relative;touch-action:none}
+canvas{width:100%;height:100%;display:block;touch-action:none}
+.pt{position:absolute;width:44px;height:44px;margin:-22px 0 0 -22px;touch-action:none;display:grid;place-items:center}
+.pt b{width:11px;height:11px;border-radius:50%;background:#27d9ff;border:1px solid #fff;box-shadow:0 0 8px #27d9ff;opacity:.55;transition:transform .1s}
+.pt.act b{opacity:1;transform:scale(1.5)}
+#msg{padding:4px 8px;font-size:11px;color:#8ab;min-height:20px;flex:none}
+#log{color:#f77}
+#empty{position:absolute;color:#789;text-align:center;padding:20px}
+</style></head><body>
+<div class="bar">
+<button id="bLoad" title="Загрузить фотографию">Загрузить фото</button>
+<button id="bSetup" title="Расставить точки по суставам, не деформируя фото">Настроить точки</button>
+<button id="bPose" class="on" title="Двигать точки и менять позу">Изменить позу</button>
+<button id="bBA" title="Удерживайте/переключите, чтобы увидеть оригинал">До / После</button>
+<button id="bReset" title="Вернуть исходное изображение">Сбросить</button>
+<button id="bSave" title="Сохранить результат в PNG без точек">Сохранить PNG</button>
+</div>
+<div id="stage"><div id="wrap"><canvas id="c"></canvas></div><div id="empty">Загрузите фотографию.<br>Режим A: деформируется вся фотография.</div></div>
+<div id="msg"><span id="tip">Режим «Настроить точки»: поставьте точки на плечи, грудь, талию, таз и колени, затем «Зафиксировать».</span> <span id="log"></span></div>
+<div class="bar">
+<label>Сила <input id="sStr" type="range" min=".2" max="1.5" step=".05" value="1"><i title="Сила деформации: множитель смещения точки">?</i></label>
+<label>Радиус <input id="sRad" type="range" min=".1" max="1" step=".02" value=".6"><i title="Радиус влияния: как далеко деформация распространяется от точек">?</i></label>
+<button id="bVis" class="on" title="Показать или скрыть точки">Точки</button>
+<button id="bUndo" title="Отменить (Ctrl+Z)">↶</button>
+<button id="bRedo" title="Повторить (Ctrl+Y)">↷</button>
+</div>
+<script>
+const $=s=>document.querySelector(s),log=m=>$('#log').textContent=m;
+addEventListener('error',e=>log('JS: '+e.message));addEventListener('unhandledrejection',e=>log('JS: '+(e.reason&&e.reason.message||e.reason)));
+document.querySelectorAll('i').forEach(i=>i.onclick=()=>$('#tip').textContent=i.title);
+const NAMES=['Плечи','Грудная клетка','Талия','Таз','Левое колено','Правое колено'];
+const DEF=[[.5,.2],[.5,.3],[.5,.42],[.5,.52],[.42,.74],[.58,.74]];
+const GX=30,GY=40,AN=[[0,0],[.5,0],[1,0],[0,.5],[1,.5],[0,1],[.5,1],[1,1]];
+let P=DEF.map(a=>a.slice()),Q=DEF.map(a=>a.slice()),mode='setup',hasImg=false,before=false,vis=true,ar=1,imgW=1,imgH=1,tex,undo=[],redo=[],act=-1,last=null,snap=null;
+const cv=$('#c'),gl=cv.getContext('webgl',{preserveDrawingBuffer:true,antialias:true});
+if(!gl)log('WebGL недоступен');
+const sh=(t,s)=>{const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(o));return o};
+const pr=gl.createProgram();
+gl.attachShader(pr,sh(gl.VERTEX_SHADER,'attribute vec2 p;attribute vec2 u;varying vec2 v;void main(){v=u;gl_Position=vec4(p.x*2.-1.,1.-p.y*2.,0,1);}'));
+gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,'precision mediump float;varying vec2 v;uniform sampler2D t;void main(){gl_FragColor=texture2D(t,v);}'));
+gl.linkProgram(pr);gl.useProgram(pr);
+const NV=(GX+1)*(GY+1),uv=new Float32Array(NV*2),pos=new Float32Array(NV*2),idx=[];
+for(let j=0;j<=GY;j++)for(let i=0;i<=GX;i++){const k=(j*(GX+1)+i)*2;uv[k]=i/GX;uv[k+1]=j/GY}
+for(let j=0;j<GY;j++)for(let i=0;i<GX;i++){const a=j*(GX+1)+i,b=a+1,c=a+GX+1,d=c+1;idx.push(a,b,c,b,d,c)}
+const bind=(n,d,sz)=>{const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);gl.bufferData(gl.ARRAY_BUFFER,d,gl.DYNAMIC_DRAW);const l=gl.getAttribLocation(pr,n);gl.enableVertexAttribArray(l);gl.vertexAttribPointer(l,sz,gl.FLOAT,false,0,0);return b};
+const pb=bind('p',pos,2);bind('u',uv,2);
+const ib=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(idx),gl.STATIC_DRAW);
+
+function deform(){
+ const moved=before||mode==='setup';
+ const H=P.concat(AN),G=Q.concat(AN),n=H.length,R=+$('#sRad').value*1.2,A=ar;
+ for(let j=0;j<=GY;j++)for(let i=0;i<=GX;i++){
+  const k=(j*(GX+1)+i)*2,x=i/GX*A,y=j/GY;let ox=i/GX,oy=y;
+  if(!moved){
+   let sw=0,px=0,py=0,qx=0,qy=0,dm=9;const w=[];
+   for(let h=0;h<n;h++){const dx=H[h][0]*A-x,dy=H[h][1]-y,d2=dx*dx+dy*dy;if(h<6)dm=Math.min(dm,Math.sqrt(d2));const t=1/(d2+1e-4);w[h]=t;sw+=t;px+=t*H[h][0]*A;py+=t*H[h][1];qx+=t*G[h][0]*A;qy+=t*G[h][1]}
+   px/=sw;py/=sw;qx/=sw;qy/=sw;let mu=0,ar_=0,ai=0;
+   for(let h=0;h<n;h++){const a=H[h][0]*A-px,b=H[h][1]-py,c=G[h][0]*A-qx,d=G[h][1]-qy;mu+=w[h]*(a*a+b*b);ar_+=w[h]*(a*c+b*d);ai+=w[h]*(a*d-b*c)}
+   ar_/=mu;ai/=mu;const vx=x-px,vy=y-py,fx=(ar_*vx-ai*vy+qx)/A,fy=ar_*vy+ai*vx+qy;
+   let g=Math.max(0,1-dm/R);g=g*g*(3-2*g);if(dm>=R)g=0;
+   const inner=Math.min(1,dm/(R*.15));g=Math.max(g,0);
+   ox+= (fx-ox)*(dm<R*.15?1:g);oy+=(fy-oy)*(dm<R*.15?1:g);
+  }
+  pos[k]=ox;pos[k+1]=oy}
+ gl.bindBuffer(gl.ARRAY_BUFFER,pb);gl.bufferSubData(gl.ARRAY_BUFFER,0,pos);
+}
+function draw(){if(!hasImg)return;deform();gl.viewport(0,0,cv.width,cv.height);gl.clearColor(.04,.05,.07,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.drawElements(gl.TRIANGLES,idx.length,gl.UNSIGNED_SHORT,0);place()}
+const pts=NAMES.map((n,i)=>{const d=document.createElement('div');d.className='pt';d.title=n;d.innerHTML='<b></b>';$('#wrap').appendChild(d);
+ d.addEventListener('pointerdown',e=>{if(!hasImg)return;e.preventDefault();d.setPointerCapture(e.pointerId);act=i;last=rel(e);snap=Q.map(a=>a.slice());d.classList.add('act');$('#tip').textContent=n},{passive:false});
+ d.addEventListener('pointermove',e=>{if(act!==i)return;e.preventDefault();const p=rel(e);
+  if(mode==='setup'){P[i]=p;Q[i]=p.slice()}else{const s=+$('#sStr').value;Q[i]=[Q[i][0]+(p[0]-last[0])*s,Q[i][1]+(p[1]-last[1])*s]}
+  last=p;before=false;$('#bBA').classList.remove('on');draw()},{passive:false});
+ const end=e=>{if(act!==i)return;act=-1;d.classList.remove('act');if(mode==='pose'){undo.push(snap);redo=[];upd()}};
+ d.addEventListener('pointerup',end);d.addEventListener('pointercancel',end);return d});
+function rel(e){const r=cv.getBoundingClientRect();return[Math.min(1,Math.max(0,(e.clientX-r.left)/r.width)),Math.min(1,Math.max(0,(e.clientY-r.top)/r.height))]}
+function place(){pts.forEach((d,i)=>{const q=(mode==='setup'||before)?P[i]:Q[i];d.style.left=q[0]*100+'%';d.style.top=q[1]*100+'%';d.style.display=vis&&hasImg?'grid':'none'})}
+function fit(){if(!hasImg)return;const s=$('#stage'),w=s.clientWidth,h=s.clientHeight,k=Math.min(w/imgW,h/imgH);$('#wrap').style.width=imgW*k+'px';$('#wrap').style.height=imgH*k+'px'}
+addEventListener('resize',fit);
+function upd(){$('#bUndo').disabled=!undo.length;$('#bRedo').disabled=!redo.length}
+function setMode(m){if(m==='setup'){Q=P.map(a=>a.slice());undo=[];redo=[];$('#tip').textContent='Перетащите точки на суставы. Деформация отключена.'}else $('#tip').textContent='Двигайте точки: фото деформируется.';
+ mode=m;$('#bSetup').classList.toggle('on',m==='setup');$('#bPose').classList.toggle('on',m==='pose');$('#bPose').textContent='Изменить позу';$('#bSetup').textContent=m==='setup'?'Зафиксировать точки':'Настроить точки';upd();draw()}
+$('#bSetup').onclick=()=>setMode(mode==='setup'?'pose':'setup');
+$('#bPose').onclick=()=>setMode('pose');
+$('#bBA').onclick=()=>{before=!before;$('#bBA').classList.toggle('on',before);draw()};
+$('#bReset').onclick=()=>{if(mode==='pose')undo.push(Q.map(a=>a.slice()));Q=P.map(a=>a.slice());redo=[];upd();draw()};
+$('#bVis').onclick=()=>{vis=!vis;$('#bVis').classList.toggle('on',vis);place()};
+const doUndo=()=>{if(!undo.length)return;redo.push(Q.map(a=>a.slice()));Q=undo.pop();upd();draw()},doRedo=()=>{if(!redo.length)return;undo.push(Q.map(a=>a.slice()));Q=redo.pop();upd();draw()};
+$('#bUndo').onclick=doUndo;$('#bRedo').onclick=doRedo;
+addEventListener('keydown',e=>{if(e.ctrlKey||e.metaKey){if(e.key==='z'){e.preventDefault();doUndo()}if(e.key==='y'){e.preventDefault();doRedo()}}});
+$('#sRad').oninput=draw;
+const fi=document.createElement('input');fi.type='file';fi.accept='image/*';
+$('#bLoad').onclick=()=>fi.click();
+fi.onchange=()=>{const f=fi.files[0];if(!f)return;const u=URL.createObjectURL(f),im=new Image();
+ im.onerror=()=>log('Не удалось открыть изображение');
+ im.onload=()=>{try{const M=Math.min(2048,gl.getParameter(gl.MAX_TEXTURE_SIZE)),k=Math.min(1,M/Math.max(im.naturalWidth,im.naturalHeight));
+  imgW=Math.round(im.naturalWidth*k);imgH=Math.round(im.naturalHeight*k);ar=imgW/imgH;
+  const t=document.createElement('canvas');t.width=imgW;t.height=imgH;t.getContext('2d').drawImage(im,0,0,imgW,imgH);
+  tex=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,t);
+  [[gl.TEXTURE_MIN_FILTER,gl.LINEAR],[gl.TEXTURE_MAG_FILTER,gl.LINEAR],[gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE],[gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE]].forEach(a=>gl.texParameteri(gl.TEXTURE_2D,a[0],a[1]));
+  const pk=Math.min(1,1400/Math.max(imgW,imgH));cv.width=Math.round(imgW*pk);cv.height=Math.round(imgH*pk);
+  hasImg=true;$('#empty').style.display='none';P=DEF.map(a=>a.slice());setMode('setup');fit();draw();URL.revokeObjectURL(u);log('')}catch(e){log('Ошибка: '+e.message)}};im.src=u;fi.value=''};
+$('#bSave').onclick=()=>{if(!hasImg)return;const w=cv.width,h=cv.height;cv.width=imgW;cv.height=imgH;draw();
+ cv.toBlob(b=>{const a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='pose.png';a.click();cv.width=w;cv.height=h;draw()},'image/png')};
+document.addEventListener('touchmove',e=>{if(act>=0)e.preventDefault()},{passive:false});
+upd();
+</script></body></html>
