@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
-<title>SHARSHARIKI CONTROL — Photo Mesh Editor</title>
+<title>SHARSHARIKI CONTROL — Photo Mesh v1.1</title>
 <style>
 :root{--bg:#0b0e13;--pn:#141a22;--tx:#d8e6f2;--ac:#27d9ff;color-scheme:dark}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -64,20 +64,32 @@ const pb=bind('p',pos,2);bind('u',uv,2);
 const ib=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(idx),gl.STATIC_DRAW);
 
 function deform(){
- const neutral=before||mode==='setup',radius=Math.max(.035,+$('#sRad').value*.55);
+ const neutral=before||mode==='setup';
+ const radius=Math.max(.08,+$('#sRad').value*.45);
+ const delta=Q.map((q,h)=>[q[0]-P[h][0],q[1]-P[h][1]]);
+ // Connected body controls: hip motion carries torso and upper legs.
+ const linked=delta.map(v=>v.slice());
+ const hip=delta[3];
+ for(let h of [0,1,2]){linked[h][0]+=hip[0]*([.2,.38,.62][h]);linked[h][1]+=hip[1]*([.2,.38,.62][h]);}
+ for(let h of [4,5]){linked[h][0]+=hip[0]*.42;linked[h][1]+=hip[1]*.42;}
+ // Cap the effective deformation of each handle to avoid runaway stretching.
+ const maxShift=.17;
+ for(let h=0;h<6;h++){const len=Math.hypot(linked[h][0]*ar,linked[h][1]);if(len>maxShift){const k=maxShift/len;linked[h][0]*=k;linked[h][1]*=k;}}
  for(let j=0;j<=GY;j++)for(let i=0;i<=GX;i++){
   const k=(j*(GX+1)+i)*2,ux=i/GX,uy=j/GY;
   let vx=ux,vy=uy;
   if(!neutral){
-   let dx=0,dy=0;
+   let sx=0,sy=0,ws=0;
    for(let h=0;h<6;h++){
     const dist=Math.hypot((ux-P[h][0])*ar,uy-P[h][1]);
-    const weight=Math.exp(-3*dist*dist/(radius*radius));
-    dx+=(Q[h][0]-P[h][0])*weight;
-    dy+=(Q[h][1]-P[h][1])*weight;
+    const weight=Math.exp(-2.4*dist*dist/(radius*radius));
+    sx+=linked[h][0]*weight;sy+=linked[h][1]*weight;ws+=weight;
    }
-   const fade=Math.max(0,Math.min(1,ux*15,(1-ux)*15,uy*15,(1-uy)*15));
-   vx=ux+dx*fade;vy=uy+dy*fade;
+   // Blend overlapping joints, keep nearby mesh movement coherent.
+   const blend=Math.max(1,ws*.72);
+   sx/=blend;sy/=blend;
+   const edge=Math.max(0,Math.min(1,ux*18,(1-ux)*18,uy*18,(1-uy)*18));
+   vx=ux+sx*edge;vy=uy+sy*edge;
   }
   pos[k]=vx;pos[k+1]=vy;
  }
