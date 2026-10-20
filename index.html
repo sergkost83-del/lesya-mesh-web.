@@ -64,21 +64,23 @@ const pb=bind('p',pos,2);bind('u',uv,2);
 const ib=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,ib);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(idx),gl.STATIC_DRAW);
 
 function deform(){
- const moved=before||mode==='setup';
- const H=P.concat(AN),G=Q.concat(AN),n=H.length,R=+$('#sRad').value*1.2,A=ar;
+ const neutral=before||mode==='setup',radius=Math.max(.035,+$('#sRad').value*.55);
  for(let j=0;j<=GY;j++)for(let i=0;i<=GX;i++){
-  const k=(j*(GX+1)+i)*2,x=i/GX*A,y=j/GY;let ox=i/GX,oy=y;
-  if(!moved){
-   let sw=0,px=0,py=0,qx=0,qy=0,dm=9;const w=[];
-   for(let h=0;h<n;h++){const dx=H[h][0]*A-x,dy=H[h][1]-y,d2=dx*dx+dy*dy;if(h<6)dm=Math.min(dm,Math.sqrt(d2));const t=1/(d2+1e-4);w[h]=t;sw+=t;px+=t*H[h][0]*A;py+=t*H[h][1];qx+=t*G[h][0]*A;qy+=t*G[h][1]}
-   px/=sw;py/=sw;qx/=sw;qy/=sw;let mu=0,ar_=0,ai=0;
-   for(let h=0;h<n;h++){const a=H[h][0]*A-px,b=H[h][1]-py,c=G[h][0]*A-qx,d=G[h][1]-qy;mu+=w[h]*(a*a+b*b);ar_+=w[h]*(a*c+b*d);ai+=w[h]*(a*d-b*c)}
-   ar_/=mu;ai/=mu;const vx=x-px,vy=y-py,fx=(ar_*vx-ai*vy+qx)/A,fy=ar_*vy+ai*vx+qy;
-   let g=Math.max(0,1-dm/R);g=g*g*(3-2*g);if(dm>=R)g=0;
-   const inner=Math.min(1,dm/(R*.15));g=Math.max(g,0);
-   ox+= (fx-ox)*(dm<R*.15?1:g);oy+=(fy-oy)*(dm<R*.15?1:g);
+  const k=(j*(GX+1)+i)*2,ux=i/GX,uy=j/GY;
+  let vx=ux,vy=uy;
+  if(!neutral){
+   let dx=0,dy=0;
+   for(let h=0;h<6;h++){
+    const dist=Math.hypot((ux-P[h][0])*ar,uy-P[h][1]);
+    const weight=Math.exp(-3*dist*dist/(radius*radius));
+    dx+=(Q[h][0]-P[h][0])*weight;
+    dy+=(Q[h][1]-P[h][1])*weight;
+   }
+   const fade=Math.max(0,Math.min(1,ux*15,(1-ux)*15,uy*15,(1-uy)*15));
+   vx=ux+dx*fade;vy=uy+dy*fade;
   }
-  pos[k]=ox;pos[k+1]=oy}
+  pos[k]=vx;pos[k+1]=vy;
+ }
  gl.bindBuffer(gl.ARRAY_BUFFER,pb);gl.bufferSubData(gl.ARRAY_BUFFER,0,pos);
 }
 function draw(){if(!hasImg)return;deform();gl.viewport(0,0,cv.width,cv.height);gl.clearColor(.04,.05,.07,1);gl.clear(gl.COLOR_BUFFER_BIT);gl.drawElements(gl.TRIANGLES,idx.length,gl.UNSIGNED_SHORT,0);place()}
